@@ -54,7 +54,7 @@ Quando este epic fechar, **EPIC-001 (parked)** pode ser ativado para roteirizar 
 | S2 | 0.2 | [Remover todas as referências Lovable](../stories/0.2.story.md) | ✅ Done | 20 min |
 | S3 | 0.3 | [Footer com disclaimer TFTEC](../stories/0.3.story.md) | ✅ Done | 15 min |
 | S4 | 0.4 | [Admin Dashboard com dados reais](../stories/0.4.story.md) | ✅ Done | 45 min |
-| S5 | 0.5 | [Polish — TD-3 + TD-5 + TD-6](../stories/0.5.story.md) | ✅ Approved | 30 min |
+| S5 | 0.5 | [Polish — TD-3 + TD-5 + TD-6](../stories/0.5.story.md) | ✅ Done (CONCERNS) | 30 min |
 
 > Total estimado: ~140 min. Stories 0.1-0.4 fecharam o escopo principal; Story 0.5 resolve tech debts do QA gate. Stories adicionais (0.6+) podem ser criadas se surgirem novos ajustes.
 
