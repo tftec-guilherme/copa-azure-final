@@ -40,6 +40,29 @@ public sealed class PurchaseConsumerFunctionTests
     }
 
     [Fact]
+    public async Task Passes_EntraOid_Through_To_Repository()
+    {
+        // Story 2.3 AC-9 — o consumer repassa o entra_oid (claim oid do gateway) para
+        // o repositório, que o grava na coluna entra_oid (verificado via captura do arg).
+        var oid = Guid.Parse("55555555-6666-7777-8888-999999999999");
+        PurchaseMessage? captured = null;
+
+        var repo = new Mock<IPurchaseRepository>();
+        repo.Setup(r => r.InsertPurchaseAsync(It.IsAny<PurchaseMessage>(), It.IsAny<CancellationToken>()))
+            .Callback<PurchaseMessage, CancellationToken>((m, _) => captured = m)
+            .ReturnsAsync(InsertOutcome.Inserted);
+
+        var sut = new PurchaseConsumerFunction(repo.Object, NullLogger<PurchaseConsumerFunction>.Instance);
+
+        var message = NewMessage();
+        message.EntraOid = oid;
+        await sut.RunAsync(Serialize(message), CancellationToken.None);
+
+        Assert.NotNull(captured);
+        Assert.Equal(oid, captured!.EntraOid);
+    }
+
+    [Fact]
     public async Task Duplicate_is_swallowed_silently_no_throw()
     {
         // AC-6: enviar a mesma mensagem 2x → consumer NÃO lança (não vai para DLQ).

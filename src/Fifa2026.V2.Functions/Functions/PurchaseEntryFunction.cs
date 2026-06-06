@@ -16,6 +16,14 @@ namespace Fifa2026.V2.Functions.Functions;
 /// </summary>
 public sealed class PurchaseEntryFunction
 {
+    /// <summary>
+    /// Story 2.3 AC-9 / ADE-005 Inv 4 — header de identidade propagado pelo gateway
+    /// YARP após validar o JWT Entra (claim `oid`). A Function confia neste header
+    /// (não valida token) porque o gateway é o guardião único. O cliente nunca chama
+    /// a Function diretamente (URL real não exposta — ADE-004 Inv 1/5).
+    /// </summary>
+    private const string EntraOidHeader = "X-Entra-OID";
+
     private readonly ILogger<PurchaseEntryFunction> _logger;
 
     public PurchaseEntryFunction(ILogger<PurchaseEntryFunction> logger)
@@ -76,12 +84,22 @@ public sealed class PurchaseEntryFunction
 
         var correlationId = Guid.NewGuid();
 
+        // Story 2.3 AC-9 — lê o X-Entra-OID propagado pelo gateway (claim `oid` do
+        // token validado). Ausente/inválido → null (fluxo segue sem identidade Entra;
+        // entra_oid fica NULL no SQL). NÃO logamos o oid (PII de identidade — AC-12).
+        Guid? entraOid = null;
+        var entraOidHeader = req.Headers[EntraOidHeader].ToString();
+        if (!string.IsNullOrWhiteSpace(entraOidHeader) && Guid.TryParse(entraOidHeader, out var parsedOid))
+        {
+            entraOid = parsedOid;
+        }
+
         // BeginScope → App Insights captura como customDimensions.CorrelationId (ADE-000 Inv 5).
         using (_logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = correlationId }))
         {
             _logger.LogInformation(
-                "Compra v2 recebida: matchId={MatchId} category={Category} userId={UserId} quantity={Quantity}",
-                request.MatchId, request.Category, request.UserId, request.Quantity);
+                "Compra v2 recebida: matchId={MatchId} category={Category} userId={UserId} quantity={Quantity} hasEntraIdentity={HasEntraIdentity}",
+                request.MatchId, request.Category, request.UserId, request.Quantity, entraOid.HasValue);
 
             var message = new PurchaseMessage
             {
@@ -89,7 +107,8 @@ public sealed class PurchaseEntryFunction
                 MatchId = request.MatchId,
                 Category = request.Category,
                 UserId = request.UserId,
-                Quantity = request.Quantity
+                Quantity = request.Quantity,
+                EntraOid = entraOid
             };
 
             return new EntryOutput

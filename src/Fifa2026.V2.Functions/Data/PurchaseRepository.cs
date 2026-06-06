@@ -36,10 +36,13 @@ public sealed class PurchaseRepository : IPurchaseRepository
         // a partir de ticket_categories (JOIN por match_id + category). Se o par
         // (matchId, category) não existir, o SELECT interno não retorna linha e o
         // INSERT ... SELECT não afeta nenhuma linha (rowsAffected == 0).
+        // Story 2.3 AC-9 / ADE-005 Inv 3 — grava entra_oid (claim `oid` do token Entra,
+        // propagado pelo gateway). NULL quando a compra não tem identidade Entra
+        // (coluna entra_oid é UNIQUEIDENTIFIER NULL — alunos antigos sem oid não quebram).
         const string sql = """
             INSERT INTO dbo.purchases
                 (user_id, ticket_category_id, quantity, unit_price, total_price,
-                 status, source, correlation_id, created_at, updated_at)
+                 status, source, correlation_id, entra_oid, created_at, updated_at)
             SELECT
                 @UserId,
                 tc.id,
@@ -49,6 +52,7 @@ public sealed class PurchaseRepository : IPurchaseRepository
                 'completed',
                 'v2',
                 @CorrelationId,
+                @EntraOid,
                 GETDATE(),
                 GETDATE()
             FROM dbo.ticket_categories tc
@@ -68,7 +72,8 @@ public sealed class PurchaseRepository : IPurchaseRepository
                     message.Quantity,
                     message.CorrelationId,
                     message.MatchId,
-                    message.Category
+                    message.Category,
+                    message.EntraOid
                 },
                 cancellationToken: cancellationToken);
 

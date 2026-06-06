@@ -22,6 +22,16 @@ const string RateLimiterPolicy = "fixed";              // partição fixed-windo
 const string OutputCachePolicy = "purchase-status-30s"; // cache 30s no GET (AC-6)
 const string CorsPolicy = "frontend";                   // origin restrito ao front (AC-7)
 const string CorrelationHeader = "X-Correlation-ID";    // ADE-000 Inv 5 / AC-8
+const string EntraOidHeader = "X-Entra-OID";            // Story 2.3 AC-7 / ADE-005 Inv 4
+
+// Claim names do Microsoft Identity Platform (AC-14 anti-hallucination — validados
+// contra docs oficiais "id-token-claims-reference" / "access-token-claims-reference").
+//   - "oid": object id estável do usuário no tenant (token v2.0 / endpoint /v2.0).
+//   - URI longa: nome do mesmo claim após o mapeamento de inbound claims do
+//     JwtBearer handler (System.Security.Claims) — usado como fallback (ADE-005 Inv 4 /
+//     story troubleshooting "Claim oid ausente").
+const string OidClaim = "oid";
+const string OidClaimUri = "http://schemas.microsoft.com/identity/claims/objectidentifier";
 
 // -----------------------------------------------------------------------------
 // YARP reverse proxy (ADE-004 Inv 1 e 2): rotas/clusters do appsettings.json +
@@ -52,6 +62,39 @@ builder.Services
             // Devolve o mesmo correlationId ao cliente (observabilidade de borda — AC-11).
             transformContext.HttpContext.Response.Headers[CorrelationHeader] = correlationId;
 
+            return ValueTask.CompletedTask;
+        });
+
+        // Story 2.3 AC-7 / ADE-005 Inv 4 — propagação de identidade downstream.
+        // Após o JWT ser validado pelo AddJwtBearer, extrai o claim `oid` do usuário
+        // autenticado e o injeta como header X-Entra-OID na requisição encaminhada à
+        // Function F1 (que grava entra_oid em SQL). A Function NUNCA valida o token —
+        // confia no header propagado pelo gateway (guardião único de JWT).
+        //
+        // SEGURANÇA (defense-in-depth): SEMPRE remove qualquer X-Entra-OID que tenha
+        // vindo do cliente ANTES de (eventualmente) injetar o valor derivado do token.
+        // Isso impede spoofing de identidade — o cliente não consegue forjar o header.
+        transformBuilderContext.AddRequestTransform(transformContext =>
+        {
+            // Anti-spoofing: descarta qualquer X-Entra-OID de origem externa.
+            transformContext.ProxyRequest.Headers.Remove(EntraOidHeader);
+
+            var user = transformContext.HttpContext.User;
+            if (user?.Identity?.IsAuthenticated == true)
+            {
+                // Token v2.0 traz o claim "oid"; após o mapeamento inbound do handler
+                // o mesmo valor pode aparecer sob a URI longa (fallback — ADE-005 Inv 4).
+                var oid = user.FindFirst(OidClaim)?.Value
+                    ?? user.FindFirst(OidClaimUri)?.Value;
+
+                if (!string.IsNullOrWhiteSpace(oid))
+                {
+                    transformContext.ProxyRequest.Headers.TryAddWithoutValidation(EntraOidHeader, oid);
+                }
+            }
+
+            // NÃO logamos o token nem o oid em texto (AC-12 / CodeRabbit focus area —
+            // oid é PII de identidade; nunca aparece em log de aplicação).
             return ValueTask.CompletedTask;
         });
     });
@@ -101,26 +144,76 @@ builder.Services.AddCors(options =>
 });
 
 // -----------------------------------------------------------------------------
-// AC-9 — JWT placeholder preparatório (ADE-004 Inv 4 / ADE-005 Inv 4).
-// AddJwtBearer CONFIGURADO apontando para o issuer Entra workforce, mas as rotas
-// permanecem ANÔNIMAS em F2 (sem RequireAuthorization) — exatamente como o
-// <choose> desabilitado do APIM. F3 ativa a validação.
+// Story 2.3 AC-6 / AC-12 — Validação de JWT Entra ATIVADA no gateway YARP
+// (ADE-004 Inv 4 / ADE-005 Inv 4). O placeholder de F2 ganha vida: AddJwtBearer
+// valida iss/aud/assinatura/expiração contra o discovery do issuer Entra workforce.
+//
+// CARRY-FORWARD M-1 (gate S2.2) — FAIL-CLOSED: o tenant NÃO tem default "common".
+// "common" aceitaria tokens de QUALQUER tenant Entra (multi-tenant) — brecha de
+// segurança. O tenant é configuração OBRIGATÓRIA: ausência → a app não sobe.
+// O issuer e o audience são validados EXPLICITAMENTE (ValidIssuer / ValidAudiences),
+// não apenas inferidos do Authority (ADE-005 Inv 1).
+//
+// Config requerida (App Settings do Container App, sem valores reais no repo):
+//   EntraTenantId  — GUID do tenant workforce do aluno (Portal → Entra ID → Overview)
+//   EntraClientId  — Application (client) ID da App Registration SPA (= aud do token)
 // -----------------------------------------------------------------------------
-var tenantId = builder.Configuration["Jwt:TenantId"] ?? "common";
-var audience = builder.Configuration["Jwt:Audience"] ?? "api://fifa2026-v2-gateway";
+var entraTenantId = builder.Configuration["EntraTenantId"]
+    // Compat: aceita a chave Jwt:TenantId herdada de F2, mas SEM default "common".
+    ?? builder.Configuration["Jwt:TenantId"];
+var entraClientId = builder.Configuration["EntraClientId"]
+    ?? builder.Configuration["Jwt:Audience"];
+
+if (string.IsNullOrWhiteSpace(entraTenantId) ||
+    string.Equals(entraTenantId, "common", StringComparison.OrdinalIgnoreCase))
+{
+    // Fail-closed: recusa subir com tenant ausente ou multi-tenant ("common").
+    throw new InvalidOperationException(
+        "Configuração de identidade ausente/insegura: defina 'EntraTenantId' com o GUID " +
+        "do tenant workforce (não use 'common' — aceitaria tokens de qualquer tenant). " +
+        "Story 2.3 AC-6 / carry-forward M-1 do gate S2.2.");
+}
+
+if (string.IsNullOrWhiteSpace(entraClientId))
+{
+    throw new InvalidOperationException(
+        "Configuração de identidade ausente: defina 'EntraClientId' com o Application " +
+        "(client) ID da App Registration SPA (= audience esperado do access token). " +
+        "Story 2.3 AC-6.");
+}
+
+// Authority v2.0 (token v2.0 traz claim `oid`). O issuer EXATO esperado é derivado
+// do tenant — validado explicitamente abaixo (não confiamos só no metadata).
+var entraAuthority = $"https://login.microsoftonline.com/{entraTenantId}/v2.0";
+var entraIssuerV2 = $"https://login.microsoftonline.com/{entraTenantId}/v2.0";
+
+// O esquema "Entra" é também o DEFAULT (authenticate + challenge). Em F2 o handler
+// foi registrado sob "Entra" mas o default ficou "Bearer" — inofensivo enquanto as
+// rotas eram anônimas; com RequireAuthorization() em F3 o default precisa apontar
+// para o esquema que existe, senão o challenge falha (No DefaultChallengeScheme).
+const string EntraScheme = "Entra";
 builder.Services
-    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer("Entra", options =>
+    .AddAuthentication(EntraScheme)
+    .AddJwtBearer(EntraScheme, options =>
     {
-        // F3: o discovery do issuer Entra valida iss/aud/assinatura/expiração.
-        options.Authority = $"https://login.microsoftonline.com/{tenantId}/v2.0";
-        options.Audience = audience;
+        // Discovery (.well-known/openid-configuration) fornece JWKS para validar a
+        // assinatura RS256. iss/aud/lifetime são checados EXPLICITAMENTE abaixo.
+        options.Authority = entraAuthority;
+        options.Audience = entraClientId;
+        options.RequireHttpsMetadata = true;
         options.TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
         {
             ValidateIssuer = true,
+            // ValidIssuer EXPLÍCITO (M-1): só aceita o issuer do tenant configurado.
+            ValidIssuer = entraIssuerV2,
             ValidateAudience = true,
+            // ValidAudiences EXPLÍCITO (M-1): aceita o client id e o App ID URI
+            // (api://<client-id>) — ambos formatos de `aud` que o Entra emite p/ SPA.
+            ValidAudiences = new[] { entraClientId, $"api://{entraClientId}" },
             ValidateLifetime = true,
-            ValidateIssuerSigningKey = true
+            ValidateIssuerSigningKey = true,
+            // Sem tolerância extra de relógio: token expirado → 401 (AC-12).
+            ClockSkew = TimeSpan.Zero
         };
     });
 builder.Services.AddAuthorization();
@@ -142,12 +235,15 @@ app.UseAuthorization();           // 5. Authorization
 // Endpoint de saúde para smoke test / Container App health probe.
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "gateway-yarp" }));
 
-// 6. MapReverseProxy com rate-limit em todas as rotas e cache na rota GET.
+// 6. MapReverseProxy com rate-limit em todas as rotas, cache na rota GET e, agora
+//    em F3, EXIGÊNCIA de JWT Entra válido em todas as rotas v2 (AC-6).
+//    Sem Bearer válido → 401 (UseAuthentication/UseAuthorization rejeitam antes do
+//    proxy). Token expirado/issuer errado/aud errado → 401 (AC-12). Esta linha é o
+//    "ganhar vida" do placeholder comentado de F2.
 app.MapReverseProxy()
     .RequireRateLimiting(RateLimiterPolicy)
-    .CacheOutput(OutputCachePolicy);
-// F3: aplicar .RequireAuthorization() aqui para exigir o Bearer token Entra.
-// Em F2 as rotas são ANÔNIMAS (paridade com o <choose> desabilitado do APIM — AC-9).
+    .CacheOutput(OutputCachePolicy)
+    .RequireAuthorization();
 
 app.Run();
 

@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -10,12 +11,23 @@ namespace Fifa2026.V2.Gateway.Tests;
 /// AC-4 / AC-8 — Roteamento com path rewrite e injeção de X-Correlation-ID.
 /// Valida que POST /purchase no gateway chega como POST /api/v2/purchase no backend
 /// e que o gateway injeta o header X-Correlation-ID downstream.
+///
+/// Story 2.3 — com a validação de JWT ATIVADA (AC-6), as rotas v2 exigem Bearer
+/// token Entra válido. Estes testes usam um token de teste válido (TestTokenFactory).
 /// </summary>
 public sealed class RoutingTests : IClassFixture<GatewayTestFixture>
 {
     private readonly GatewayTestFixture _fixture;
 
     public RoutingTests(GatewayTestFixture fixture) => _fixture = fixture;
+
+    private HttpClient AuthenticatedClient()
+    {
+        var client = _fixture.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", TestTokenFactory.Create());
+        return client;
+    }
 
     [Fact]
     public async Task PostPurchase_IsRewrittenTo_ApiV2Purchase_OnBackend()
@@ -28,7 +40,7 @@ public sealed class RoutingTests : IClassFixture<GatewayTestFixture>
                 .WithHeader("Content-Type", "application/json")
                 .WithBody("{\"correlationId\":\"11111111-1111-1111-1111-111111111111\",\"status\":\"queued\"}"));
 
-        var client = _fixture.CreateClient();
+        var client = AuthenticatedClient();
 
         // Act
         var response = await client.PostAsJsonAsync("/purchase",
@@ -50,7 +62,7 @@ public sealed class RoutingTests : IClassFixture<GatewayTestFixture>
                 .WithStatusCode(202)
                 .WithBody("{\"correlationId\":\"x\",\"status\":\"queued\"}"));
 
-        var client = _fixture.CreateClient();
+        var client = AuthenticatedClient();
 
         // Act — cliente NÃO envia X-Correlation-ID; o gateway deve gerar um GUID.
         var response = await client.PostAsJsonAsync("/purchase",

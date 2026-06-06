@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using Xunit;
@@ -30,7 +31,10 @@ public sealed class OutputCacheTests : IClassFixture<GatewayTestFixture>
                 .WithHeader("Content-Type", "application/json")
                 .WithBody("{\"status\":\"completed\"}"));
 
+        // Story 2.3 AC-6 — rota v2 exige Bearer válido (validação JWT ativada).
         var client = _fixture.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", TestTokenFactory.Create());
         var path = $"/purchase/{correlationId}";
 
         // Act — 1ª chamada (MISS, popula o cache).

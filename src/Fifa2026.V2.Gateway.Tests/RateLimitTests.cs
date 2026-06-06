@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -26,7 +27,10 @@ public sealed class RateLimitTests : IClassFixture<GatewayTestFixture>
                 .WithStatusCode(202)
                 .WithBody("{\"correlationId\":\"x\",\"status\":\"queued\"}"));
 
+        // Story 2.3 AC-6 — rota v2 exige Bearer válido (validação JWT ativada).
         var client = _fixture.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", TestTokenFactory.Create());
         var payload = new { matchId = 1, category = "VIP", userId = 1, quantity = 1 };
 
         // Act — 5 chamadas dentro do limite, todas devem passar.

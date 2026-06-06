@@ -7,6 +7,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { CartProvider } from "@/contexts/CartProvider";
 import { AuthProvider } from "@/contexts/AuthProvider";
+import { MsalProvider } from "@azure/msal-react";
+import { msalInstance } from "@/lib/authV2";
 import Layout from "@/components/layout/Layout";
 import Index from "./pages/Index";
 
@@ -60,9 +62,12 @@ const PageLoader = () => (
   </div>
 );
 
+// Story 2.3 / F3 — MsalProvider envolve a app para o fluxo de identidade v2 (Entra).
+// Coexiste com AuthProvider (v1 bcrypt+JWT, intocado) — comparação didática v1 vs v2.
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
+      <MsalProvider instance={msalInstance}>
       <AuthProvider>
         <CartProvider>
           <Toaster />
@@ -106,6 +111,7 @@ const App = () => (
           </BrowserRouter>
         </CartProvider>
       </AuthProvider>
+      </MsalProvider>
     </TooltipProvider>
   </QueryClientProvider>
 );
