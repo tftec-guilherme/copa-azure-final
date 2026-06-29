@@ -222,7 +222,7 @@ Suba com **imagem placeholder pública** — a imagem real vem pelo Actions (Fas
 
 ### 4.5 App Settings de identidade (gateway é fail-closed)
 
-O gateway **só sobe com as 4 `Jwt__*` presentes**. No Container App: **Application → Containers → `Edit and deploy`** → selecione o container → aba **Environment variables** → adicione as 6 (Source = Manual entry) → **Save → Create**:
+O gateway **só sobe com as 4 `Jwt__*` presentes**. No Container App: **Application → Containers → `Edit and deploy`** → selecione o container → aba **Environment variables** → adicione as 8 (Source = Manual entry) → **Save → Create**:
 
 | App Setting | Valor |
 |---|---|
@@ -232,6 +232,8 @@ O gateway **só sobe com as 4 `Jwt__*` presentes**. No Container App: **Applicat
 | `Jwt__AdminClientId` | client ID da App Reg admin (Fase 3) |
 | `FunctionAppF1Url` | `https://<seu-func>.azurewebsites.net` (sem ela `/purchase` dá 502) |
 | `Gateway__FrontendOrigin` | `https://<seu-frontend>.azurewebsites.net` (CORS restrito ao front) |
+| `BackendV1Url` | `https://<seu-backend>.azurewebsites.net` (rotas `/admin/*` → backend v1; **sem ela o admin dá 502**) |
+| `Gateway__AdminSharedSecret` | **segredo forte que VOCÊ gera** (ex.: `openssl rand -hex 24`) — injetado como header `X-Gateway-Key` p/ o backend confiar. **Use o MESMO valor no backend** (Fase 4.6) |
 
 > 🔒 **Duplo underscore:** `Jwt:CiamTenantId` na config vira `Jwt__CiamTenantId` em env var (`:` não é válido). A connection string do SQL **NÃO** vai no gateway (fica na Function). Para só testar a infra antes de ter os GUIDs reais, dá pra usar 4 GUIDs **placeholder** (válidos em forma): o gateway sobe e o `401` sem token já funciona; o fluxo com token real só fecha com os 4 GUIDs reais.
 
@@ -250,10 +252,23 @@ O gateway **só sobe com as 4 `Jwt__*` presentes**. No Container App: **Applicat
 >   "Jwt__CiamTenantId=<CiamTenantId>" "Jwt__CiamClientId=<CLIENT_ID_SPA_CIAM>" \
 >   "Jwt__AdminTenantId=<AdminTenantId>" "Jwt__AdminClientId=<CLIENT_ID_ADMIN>" \
 >   "FunctionAppF1Url=https://<seu-func>.azurewebsites.net" \
->   "Gateway__FrontendOrigin=https://<seu-frontend>.azurewebsites.net" -o table
+>   "Gateway__FrontendOrigin=https://<seu-frontend>.azurewebsites.net" \
+>   "BackendV1Url=https://<seu-backend>.azurewebsites.net" \
+>   "Gateway__AdminSharedSecret=<seu-segredo-forte>" -o table
 > ```
 
-✅ **Checkpoint:** ACR `cr<sufixo>` (Admin Enabled), Environment `cae-<sufixo>`, Container App `ca-gateway-<sufixo>` rodando (placeholder) com **ingress externo na porta 8080**, **Application Url** anotada (= `<gateway-fqdn>`), **ACR conectado** em Registries e as **6 App Settings** presentes (4 `Jwt__*` reais).
+✅ **Checkpoint:** ACR `cr<sufixo>` (Admin Enabled), Environment `cae-<sufixo>`, Container App `ca-gateway-<sufixo>` rodando (placeholder) com **ingress externo na porta 8080**, **Application Url** anotada (= `<gateway-fqdn>`), **ACR conectado** em Registries e as **8 App Settings** presentes (4 `Jwt__*` reais + `BackendV1Url` + `Gateway__AdminSharedSecret`).
+
+### 4.6 Backend confia no gateway (admin 100% workforce)
+
+A área admin é servida pelo **backend v1**, mas a autenticação é **workforce via gateway**: o gateway injeta o header `X-Gateway-Key` (= `Gateway__AdminSharedSecret`) e o backend só confia quando o valor bate. Configure o **mesmo segredo** no backend:
+
+1. Portal → o **Web App do backend** (`<seu-backend>`) → **Settings → Environment variables → `+ Add`**:
+   - **Name:** `GATEWAY_SHARED_SECRET` · **Value:** **o MESMO** valor de `Gateway__AdminSharedSecret` (Fase 4.5) → **Apply → Save** (reinicia o app).
+
+> 🔒 Sem isso, o backend cai no fluxo legado v1 e o admin workforce recebe **401/403** mesmo com token válido. O segredo nunca vai pro repositório nem pro frontend — vive só nessas **duas** App Settings (gateway + backend).
+
+✅ **Checkpoint:** `GATEWAY_SHARED_SECRET` no backend = `Gateway__AdminSharedSecret` no gateway (mesmo valor).
 
 ---
 
@@ -360,7 +375,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST "https://${FQDN}/purchase" \
 
 ## Fase 8 — Login do admin (workforce) + App Role
 
-Pré-condição: Fase 3 feita, os `Jwt__Admin*` reais no gateway (Fase 4.5) e `VITE_ADMIN_*` no fork (Fase 5).
+Pré-condição: Fase 3 feita, os `Jwt__Admin*` + `BackendV1Url` + `Gateway__AdminSharedSecret` no gateway (Fase 4.5), o `GATEWAY_SHARED_SECRET` no backend (Fase 4.6) e `VITE_ADMIN_*` no fork (Fase 5).
 
 1. Logue como admin (authority `https://login.microsoftonline.com/<AdminTenantId>`). Em [jwt.ms](https://jwt.ms): `iss = login.microsoftonline.com/.../v2.0` e `roles: ["Admin"]`.
 2. Teste a separação: um **cliente CIAM válido** numa rota admin recebe **403** (autenticado, sem a role) — **não** 401.
@@ -465,6 +480,8 @@ Adiantamento para o **último lab** (chatbot LLM). Como você cria a conta Googl
 |---|---|---|
 | **502** em toda chamada | targetPort do ingress ≠ **8080** | ingress targetPort = **8080** (Fase 4.3) |
 | **502** só em `/purchase` | `FunctionAppF1Url` ausente/errada | apontar p/ `https://<seu-func>.azurewebsites.net` (Fase 4.5) |
+| **502** nas rotas `/admin/*` | `BackendV1Url` ausente no gateway | definir `BackendV1Url` no gateway (Fase 4.5) |
+| Admin **401/403** com token válido (`roles:["Admin"]`) | `GATEWAY_SHARED_SECRET` ausente/diferente no backend | igualar ao `Gateway__AdminSharedSecret` do gateway (Fase 4.6) |
 | Container App `Failed`/CrashLoop | `Jwt__*` ausente/vazia/`"common"` (fail-closed) | 4 `Jwt__*` presentes; placeholder serve p/ subir e fazer o 401 |
 | `/purchase` dá **200** sem token | gateway não fail-closed (config errada) | revisar `AddJwtBearer`/`Jwt__*`; deveria ser **401** |
 | `/health` não responde no 1º hit | cold start (`min-replicas=0`) | aguardar ~20s e repetir |
