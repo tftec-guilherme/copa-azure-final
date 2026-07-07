@@ -528,13 +528,15 @@ No caminho cofre (o das aulas) você preenche só **2 Secrets** + as **Variables
 | `AZURE_CREDENTIALS` | JSON do Service Principal com acesso ao RG | mcp-server · gateway · flow-events |
 | `AZURE_FRONTEND_PUBLISH_PROFILE` | publish profile do `<seu-frontend>` (**SCM Basic Auth On** *antes* de capturar) | frontend |
 
-**Variables (as 13 da Final):**
+**Variables (as 15 da Final):**
 
 | Nome EXATO | Valor (seu) | Usada em (ação) |
 |---|---|---|
 | `ACR_LOGIN_SERVER` | `cr<sufixo>.azurecr.io` | mcp-server · gateway · flow-events |
 | `PHASE02_RESOURCE_GROUP` | `<seu-rg>` | todos os deploys *(fallback interno `rg-hml-tik-cin-001` no YAML)* |
 | `PHASE02_CONTAINERAPP_NAME` | `ca-gateway-<sufixo>` (o Container App do gateway das Quartas) | gateway (rebuild) |
+| `FUNCTION_APP_NAME` | `<suas-functions>` (a Function App F1 das Oitavas/Quartas — a das compras v2) | **function** |
+| `FUNCTION_RESOURCE_GROUP` | `<rg-da-function>` (o RG onde está a Function App F1 — **pode diferir** do RG dos Container Apps do `PHASE02_RESOURCE_GROUP`) | **function** (smoke) |
 | `PHASE05_MCP_APP_NAME` | `ca-mcp-<sufixo>` | mcp-server |
 | `PHASE06_FLOW_APP_NAME` | `ca-flow-<sufixo>` | flow-events |
 | `PHASE06_LOG_ANALYTICS_WORKSPACE_ID` | `<workspace-id>` | flow-events |
@@ -560,7 +562,7 @@ No caminho cofre (o das aulas) você preenche só **2 Secrets** + as **Variables
 
 > 🔀 **Não blindou pelo cofre?** O caminho inline (preencher os segredos sensíveis no seu repo) está no [Apêndice F](#apêndice-f--caminho-inline-só-para-quem-não-blindou-pelo-cofre).
 
-✅ **Checkpoint (caminho cofre):** **2 Secrets** (`AZURE_CREDENTIALS` + `AZURE_FRONTEND_PUBLISH_PROFILE`) + as **13 Variables** da Final + as **8 Variables herdadas** das Quartas, com os nomes EXATOS acima; **nenhum segredo sensível no seu repo** (blindados no cofre — o deploy detecta o secret existente e **preserva** a Key Vault reference). *(Caminho inline: preencha também os sensíveis do [Apêndice F](#apêndice-f--caminho-inline-só-para-quem-não-blindou-pelo-cofre). O job `frontend` tem fail-fast que aborta se `VITE_CIAM_CLIENT_ID` ou `VITE_FUNCTION_V2_URL` estiverem vazios.)*
+✅ **Checkpoint (caminho cofre):** **2 Secrets** (`AZURE_CREDENTIALS` + `AZURE_FRONTEND_PUBLISH_PROFILE`) + as **15 Variables** da Final + as **8 Variables herdadas** das Quartas, com os nomes EXATOS acima; **nenhum segredo sensível no seu repo** (blindados no cofre — o deploy detecta o secret existente e **preserva** a Key Vault reference). *(Caminho inline: preencha também os sensíveis do [Apêndice F](#apêndice-f--caminho-inline-só-para-quem-não-blindou-pelo-cofre). O job `frontend` tem fail-fast que aborta se `VITE_CIAM_CLIENT_ID` ou `VITE_FUNCTION_V2_URL` estiverem vazios.)*
 
 ---
 
