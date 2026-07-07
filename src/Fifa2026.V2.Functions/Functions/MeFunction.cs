@@ -43,13 +43,6 @@ public sealed class MeFunction
     private const string EntraEmailHeader = "X-Entra-Email";
     private const string EntraNameHeader = "X-Entra-Name";
 
-    /// <summary>
-    /// Story 3.5 (A-1) — flag de verificação do email, propagado pelo gateway a partir do
-    /// claim <c>email_verified</c> do token CIAM. Exigido SÓ no arm de LINK (anti-takeover:
-    /// não vincula a uma conta v1 existente sem prova de posse); o INSERT nato-CIAM não precisa.
-    /// </summary>
-    private const string EntraEmailVerifiedHeader = "X-Entra-Email-Verified";
-
     private readonly IUserRepository _users;
     private readonly ILogger<MeFunction> _logger;
 
@@ -76,10 +69,8 @@ public sealed class MeFunction
 
         var email = NullIfBlank(req.Headers[EntraEmailHeader].ToString());
         var name = NullIfBlank(req.Headers[EntraNameHeader].ToString());
-        // Story 3.5 fix — flag de verificação (só o arm de LINK o exige; INSERT nato-CIAM não).
-        var emailVerified = bool.TryParse(req.Headers[EntraEmailVerifiedHeader].ToString(), out var ev) && ev;
 
-        var result = await ResolveOrProvisionAsync(entraOid, email, name, emailVerified, cancellationToken);
+        var result = await ResolveOrProvisionAsync(entraOid, email, name, cancellationToken);
 
         return result.Outcome switch
         {
@@ -110,7 +101,7 @@ public sealed class MeFunction
     /// AQUI re-resolvemos — nunca "SELECT-then-INSERT" como única defesa (ADE-000 Inv 4).
     /// </summary>
     private async Task<MeResult> ResolveOrProvisionAsync(
-        Guid entraOid, string? email, string? name, bool emailVerified, CancellationToken cancellationToken)
+        Guid entraOid, string? email, string? name, CancellationToken cancellationToken)
     {
         // (1) resolve por oid — cliente já unificado. Zero write.
         var byOid = await _users.FindIdByEntraOidAsync(entraOid, cancellationToken);
@@ -119,11 +110,8 @@ public sealed class MeFunction
             return new MeResult(MeOutcome.Resolved, resolvedId);
         }
 
-        // (2) link por email — SÓ com email VERIFICADO (anti-takeover ADE-007 A-1): não
-        //     vincula a uma conta v1 EXISTENTE sem prova de posse do email. Email não
-        //     verificado pula direto para o INSERT (nato-CIAM) — que, se o email já pertence
-        //     a alguém, colide na UQ_users_email e vira 409 (nunca vínculo cego).
-        if (emailVerified && !string.IsNullOrWhiteSpace(email))
+        // (2) link por email — usuário da BASE v1 chegando via CIAM: vincula (não insere).
+        if (!string.IsNullOrWhiteSpace(email))
         {
             var linkedId = await _users.TryLinkByEmailAsync(entraOid, email, cancellationToken);
             if (linkedId is int linked)
