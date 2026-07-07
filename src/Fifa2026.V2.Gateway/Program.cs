@@ -684,12 +684,6 @@ app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "gate
 app.MapGet("/admin/ping", () => Results.Ok(new { status = "ok", scope = "admin" }))
     .RequireAuthorization(AdminOnlyPolicy);
 
-// 6. MapReverseProxy com rate-limit em todas as rotas, cache na rota GET e EXIGÊNCIA
-//    de JWT válido (CIAM OU workforce — DefaultPolicy) em todas as rotas v2.
-//    Sem Bearer válido → 401 (UseAuthentication/UseAuthorization rejeitam antes do
-//    proxy). Token expirado/issuer errado/aud errado → 401 (AC-6). O selector escolhe
-//    o handler do issuer do token (issuer-agnóstico — ADE-004 Inv 4 / ADE-007 Inv 2).
-app.MapReverseProxy()
     .RequireRateLimiting(RateLimiterPolicy)
     .RequireAuthorization();
 
