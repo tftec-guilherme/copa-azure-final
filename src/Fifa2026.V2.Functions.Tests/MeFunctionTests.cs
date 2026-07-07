@@ -23,13 +23,15 @@ public sealed class MeFunctionTests
     private const string Email = "joao@example.com";
     private const string Name = "João Silva";
 
-    private static HttpRequest BuildRequest(string? oid = null, string? email = null, string? name = null)
+    private static HttpRequest BuildRequest(string? oid = null, string? email = null, string? name = null, bool emailVerified = false)
     {
         var context = new DefaultHttpContext();
         var request = context.Request;
         if (oid is not null) request.Headers["X-Entra-OID"] = oid;
         if (email is not null) request.Headers["X-Entra-Email"] = email;
         if (name is not null) request.Headers["X-Entra-Name"] = name;
+        // Story 3.5 fix (A-1 re-layer): o arm de LINK por email exige email verificado.
+        if (emailVerified) request.Headers["X-Entra-Email-Verified"] = "true";
         return request;
     }
 
@@ -120,10 +122,31 @@ public sealed class MeFunctionTests
         repo.Setup(r => r.TryLinkByEmailAsync(Oid, Email, It.IsAny<CancellationToken>())).ReturnsAsync(7);
 
         var sut = Build(repo.Object);
-        var result = await sut.RunAsync(BuildRequest(oid: Oid.ToString(), email: Email, name: Name), CancellationToken.None);
+        // Story 3.5 fix (A-1 re-layer) — o LINK por email agora EXIGE email verificado.
+        var result = await sut.RunAsync(
+            BuildRequest(oid: Oid.ToString(), email: Email, name: Name, emailVerified: true),
+            CancellationToken.None);
 
         Assert.Equal(7, ReadUserId(Assert.IsType<OkObjectResult>(result)));
         repo.Verify(r => r.TryInsertCiamUserAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task LinkByEmail_SkippedWhenEmailNotVerified_FallsToInsertNotLink()
+    {
+        // Anti-takeover (ADE-007 A-1 re-layer): email NÃO verificado JAMAIS dispara o LINK
+        // (que vincularia a uma conta v1 existente sem prova de posse). Cai no INSERT
+        // nato-CIAM — no DB real, colisão de email viraria 409; aqui, sem colisão, provisiona.
+        var repo = new Mock<IUserRepository>();
+        repo.Setup(r => r.FindIdByEntraOidAsync(Oid, It.IsAny<CancellationToken>())).ReturnsAsync((int?)null);
+        repo.Setup(r => r.TryInsertCiamUserAsync(Oid, Email, Name, It.IsAny<CancellationToken>())).ReturnsAsync(100);
+
+        var sut = Build(repo.Object);
+        // BuildRequest sem emailVerified → header ausente → email não verificado.
+        var result = await sut.RunAsync(BuildRequest(oid: Oid.ToString(), email: Email, name: Name), CancellationToken.None);
+
+        Assert.Equal(100, ReadUserId(Assert.IsType<OkObjectResult>(result)));
+        repo.Verify(r => r.TryLinkByEmailAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     // -------------------------------------------------------------------------
