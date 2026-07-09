@@ -1,4 +1,3 @@
-import React, { useState, useCallback, useEffect } from 'react';
 import { useMsal, useIsAuthenticated } from '@azure/msal-react';
 import api, { type ApiUser } from '@/lib/api';
 import { AuthContext, type User, type Order } from '@/contexts/AuthContext';
