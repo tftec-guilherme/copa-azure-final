@@ -1,7 +1,9 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Threading.RateLimiting;
 using Fifa2026.V2.Gateway.Infrastructure;
-using Mirms;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
+using Yarp.ReverseProxy.Transforms;
 
 // =============================================================================
 // Fifa2026.V2.Gateway — Gateway profissional em código C# com YARP (Story 2.2 / F2)
