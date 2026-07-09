@@ -1,208 +1,114 @@
-import React, { useState, useCallback, useEffect } from 'react';
-import { useMsal, useIsAuthenticated } from '@azure/msal-react';
-import api, { type ApiUser } from '@/lib/api';
-import { AuthContext, type User, type Order } from '@/contexts/AuthContext';
-// Story 3.5 (ADE-007 Inv 8) — unificação v1 ↔ CIAM no FRONT: a sessão CIAM (Login v2)
-// vira sessão de auth de primeira classe via /api/v2/me (resolve-or-provision).
-import { isEntraConfigured, msalInstance } from '@/lib/authV2';
-import { meV2 } from '@/lib/apiV2';
+// =============================================================================
+// Story 2.11 / Quartas (F3) — Provider do login ADMIN workforce (Entra ID).
+//
+// Dirige a instância MSAL workforce gerenciada manualmente (src/lib/authAdmin.ts)
+// e publica o estado no AdminAuthContext. Escopado à área /admin em App.tsx — não
+// envolve a app inteira (o cliente CIAM não precisa dele). Coexiste com o MsalProvider
+// (CIAM) e o AuthProvider (v1) sem conflito: instância MSAL separada, contexto separado.
+// =============================================================================
 
-const STORAGE_KEY = 'copa2026_user';
-const ORDERS_KEY = 'copa2026_orders';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { EventType, type AccountInfo } from '@azure/msal-browser';
+import {
+  adminMsalInstance,
+  ensureAdminMsalInitialized,
+  isAdminEntraConfigured,
+  adminLoginRequest,
+  getAdminAccount,
+  accountHasAdminRole,
+} from '@/lib/authAdmin';
+import { AdminAuthContext } from '@/contexts/AdminAuthContext';
 
-function mapApiUser(raw: ApiUser): User {
-  return {
-    id: String(raw?.id ?? ''),
-    email: String(raw?.email ?? ''),
-    name: String(raw?.name ?? ''),
-    role: raw?.role,
-    createdAt: raw?.created_at || raw?.createdAt || new Date().toISOString(),
-  };
-}
+// Avaliado uma vez: o login workforce está configurado por env?
+const configured = isAdminEntraConfigured();
 
-export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+export const AdminAuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [account, setAccount] = useState<AccountInfo | null>(null);
+  // Sem config (ex.: Oitavas), nada a inicializar → "pronto" de imediato (gate cai no v1).
+  const [isReady, setIsReady] = useState<boolean>(!configured);
+  const [isWorkingLogin, setIsWorkingLogin] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Story 3.5 — estado da sessão CIAM (Login v2), lido do MsalProvider que envolve a app.
-  const { accounts } = useMsal();
-  const isCiamAuthenticated = useIsAuthenticated();
-
-  // Bootstrap auth + orders
   useEffect(() => {
-    const init = async () => {
-      // Load cached orders
-      const storedOrders = localStorage.getItem(ORDERS_KEY);
-      if (storedOrders) {
-        try {
-          setOrders(JSON.parse(storedOrders));
-        } catch {
-          localStorage.removeItem(ORDERS_KEY);
-        }
-      }
+    if (!configured) {
+      return;
+    }
+    let active = true;
 
-      // Load cached user (quick UI)
-      const cachedUser = localStorage.getItem(STORAGE_KEY);
-      if (cachedUser) {
-        try {
-          setUser(JSON.parse(cachedUser));
-        } catch {
-          localStorage.removeItem(STORAGE_KEY);
-        }
-      }
-
-      // If we have a token, validate/refresh user from API
-      const token = localStorage.getItem('auth_token');
-      if (token) {
-        const meRes = await api.getMe();
-        if (meRes.data?.user) {
-          setUser(mapApiUser(meRes.data.user));
-        } else {
-          // Only force logout on explicit token errors; keep cached user if server is offline
-          const msg = meRes.error || '';
-          if (/token/i.test(msg) || /n[ãa]o fornecido/i.test(msg) || /inv[áa]lido/i.test(msg)) {
-            api.logout();
-            setUser(null);
-          }
-        }
-      }
-
-      setIsLoading(false);
-    };
-
-    init();
-  }, []);
-
-  // ---------------------------------------------------------------------------
-  // Story 3.5 (ADE-007 Inv 8) — UNIFICAÇÃO v1 ↔ CIAM no FRONT. Havendo sessão CIAM
-  // (Login v2) e NÃO havendo sessão v1, hidrata o AuthContext a partir do /api/v2/me
-  // (resolve-or-provision → users.id) + os claims da conta CIAM. Assim o cliente nato-CIAM
-  // vira usuário autenticado de primeira classe e passa o gate v1 de /checkout e /admin.
-  // ADITIVO: o v1 tem PRECEDÊNCIA (prev ?? ...); labs sem CIAM ou sem /me = no-op (retro-compat
-  // Oitavas/Quartas). Falha do /me (409/422/rede) → não hidrata → o gate segue como antes.
-  // ---------------------------------------------------------------------------
-  useEffect(() => {
-    if (!isEntraConfigured()) return;         // lab sem CIAM: no-op
-    if (user) return;                          // v1 (ou já hidratado) tem precedência
-    const account = accounts[0];
-    if (!account) return;                      // sem sessão CIAM: nada a fazer
-
-    let cancelled = false;
-    (async () => {
-      const me = await meV2();                 // resolve/vincula/provisiona o users.id
-      if (cancelled || !me.userId || !Number.isFinite(me.userId)) return;
-      setUser((prev) => prev ?? {
-        id: String(me.userId),
-        email: account.username ?? '',
-        name: account.name ?? account.username ?? '',
-        role: 'user',
-        createdAt: new Date().toISOString(),
+    ensureAdminMsalInitialized()
+      .then(() => {
+        if (!active) return;
+        setAccount(getAdminAccount());
+        setIsReady(true);
+      })
+      .catch((e) => {
+        if (!active) return;
+        console.error('Falha ao inicializar MSAL admin (workforce):', e);
+        setError('Falha ao inicializar o login administrativo (Entra).');
+        setIsReady(true);
       });
-    })();
-    return () => { cancelled = true; };
-  }, [accounts, isCiamAuthenticated, user]);
 
-  // Sessão CIAM encerrada e SEM sessão v1 → limpa o usuário hidratado do CIAM.
-  useEffect(() => {
-    if (!isEntraConfigured()) return;
-    if (!isCiamAuthenticated && user && !localStorage.getItem('auth_token')) {
-      setUser(null);
-    }
-  }, [isCiamAuthenticated, user]);
+    // Mantém o estado da conta em sincronia com eventos do MSAL workforce.
+    const callbackId = adminMsalInstance.addEventCallback((message) => {
+      if (
+        message.eventType === EventType.LOGIN_SUCCESS ||
+        message.eventType === EventType.ACQUIRE_TOKEN_SUCCESS ||
+        message.eventType === EventType.LOGOUT_SUCCESS
+      ) {
+        setAccount(getAdminAccount());
+      }
+    });
 
-  // Persist user
-  useEffect(() => {
-    if (user) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(user));
-    } else {
-      localStorage.removeItem(STORAGE_KEY);
-    }
-  }, [user]);
-
-  // Persist orders
-  useEffect(() => {
-    localStorage.setItem(ORDERS_KEY, JSON.stringify(orders));
-  }, [orders]);
-
-  const login = useCallback(async (email: string, password: string): Promise<User | null> => {
-    const result = await api.login(email, password);
-    if (result.data?.user) {
-      // Best effort to load full profile (created_at)
-      const meRes = await api.getMe();
-      const mapped = meRes.data?.user ? mapApiUser(meRes.data.user) : mapApiUser(result.data.user);
-      setUser(mapped);
-      return mapped;
-    }
-    return null;
-  }, []);
-
-  const register = useCallback(async (name: string, email: string, password: string): Promise<User | null> => {
-    const result = await api.register(name, email, password);
-    if (result.data?.user) {
-      const meRes = await api.getMe();
-      const mapped = meRes.data?.user ? mapApiUser(meRes.data.user) : mapApiUser(result.data.user);
-      setUser(mapped);
-      return mapped;
-    }
-    return null;
-  }, []);
-
-  const logout = useCallback(() => {
-    // Se a sessão ativa veio do CIAM (sem token v1), encerra TAMBÉM o MSAL CIAM — senão o
-    // effect de hidratação re-loga o usuário logo em seguida.
-    const wasCiamOnly =
-      isEntraConfigured() &&
-      !localStorage.getItem('auth_token') &&
-      msalInstance.getAllAccounts().length > 0;
-    api.logout();
-    setUser(null);
-    if (wasCiamOnly) {
-      msalInstance.logoutPopup().catch(() => { /* usuário fechou o popup — ok */ });
-    }
-  }, []);
-
-  const updateProfile = useCallback(async (data: Partial<User>): Promise<boolean> => {
-    if (!user) return false;
-    if (!data.name) return true;
-
-    const res = await api.updateProfile({ name: data.name });
-    if (res.data?.user) {
-      setUser((prev) => (prev ? { ...prev, ...mapApiUser(res.data!.user) } : mapApiUser(res.data!.user)));
-      return true;
-    }
-
-    return false;
-  }, [user]);
-
-  const addOrder = useCallback((order: Omit<Order, 'id' | 'userId' | 'createdAt'>) => {
-    if (!user) return;
-
-    const newOrder: Order = {
-      ...order,
-      id: `order-${Date.now()}`,
-      userId: String(user.id),
-      createdAt: new Date().toISOString(),
+    return () => {
+      active = false;
+      if (callbackId) {
+        adminMsalInstance.removeEventCallback(callbackId);
+      }
     };
+  }, []);
 
-    setOrders((prev) => [newOrder, ...prev]);
-  }, [user]);
+  const login = useCallback(async () => {
+    setError(null);
+    setIsWorkingLogin(true);
+    try {
+      await ensureAdminMsalInitialized();
+      // PKCE via loginPopup (SPA público, sem client secret). O popup NÃO disputa o
+      // hash de redirect da página (diferente do loginRedirect).
+      const result = await adminMsalInstance.loginPopup(adminLoginRequest);
+      adminMsalInstance.setActiveAccount(result.account);
+      setAccount(result.account);
+    } catch (e) {
+      console.error('Falha no login admin (Entra workforce):', e);
+      setError('Falha no login administrativo (Entra). Tente novamente.');
+    } finally {
+      setIsWorkingLogin(false);
+    }
+  }, []);
 
-  return (
-    <AuthContext.Provider
-      value={{
-        user,
-        isAuthenticated: !!user,
-        isLoading,
-        login,
-        register,
-        logout,
-        updateProfile,
-        orders: orders.filter((o) => o.userId === String(user?.id)),
-        addOrder,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
+  const logout = useCallback(async () => {
+    const acc = getAdminAccount();
+    try {
+      await adminMsalInstance.logoutPopup({ account: acc ?? undefined });
+    } catch (e) {
+      console.error('Falha no logout admin (Entra workforce):', e);
+    } finally {
+      setAccount(null);
+    }
+  }, []);
+
+  const value = useMemo(
+    () => ({
+      isConfigured: configured,
+      isReady,
+      account,
+      isAdmin: accountHasAdminRole(account),
+      isWorkingLogin,
+      error,
+      login,
+      logout,
+    }),
+    [isReady, account, isWorkingLogin, error, login, logout]
   );
+
+  return <AdminAuthContext.Provider value={value}>{children}</AdminAuthContext.Provider>;
 };
